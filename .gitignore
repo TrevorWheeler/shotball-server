@@ -19,3 +19,24 @@
 
 # Go workspace file
 go.work
+
+
+# Logs
+logs
+*.log
+
+.env
+.env.local
+.env.*.local
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
