@@ -46,7 +46,7 @@ func connect(c echo.Context) error {
 		messageType, msg, err := ws.ReadMessage()
 
 		if messageType != websocket.TextMessage || messageType == websocket.TextMessage && string(msg) != "ping" {
-			fmt.Println(string(msg))
+			c.Logger().Info("Request: ", msg)
 		}
 
 		if err != nil {
@@ -55,9 +55,10 @@ func connect(c echo.Context) error {
 				break
 			}
 			c.Logger().Error("WebSocket read error:", err)
-			continue // or break, depending on desired behavior
+			continue
 		}
-		// handle ping pong
+
+		// TODO: ping pong - handle concurrent websocket write issue caused by pong response.
 		// if messageType == websocket.TextMessage && string(msg) == "ping" {
 		// 	err = ws.WriteMessage(websocket.TextMessage, []byte("pong"))
 		// 	if err != nil {
@@ -84,68 +85,72 @@ func connect(c echo.Context) error {
 		case "create_game":
 			// Handle other types similarly based on different IDs
 			if err := lobby.CreateGame(c, ws, requestData); err != nil {
-				c.Logger().Error("Error creating game", err)
-				// Use the error message when closing the WebSocket connection
-				closeMessage := websocket.FormatCloseMessage(websocket.CloseNormalClosure, err.Error())
-				if closeErr := ws.WriteMessage(websocket.CloseMessage, closeMessage); closeErr != nil {
-					c.Logger().Error("Error sending close message:", closeErr)
-				}
-				// Close the WebSocket connection
-				if closeErr := ws.Close(); closeErr != nil {
-					c.Logger().Error("Error closing WebSocket:", closeErr)
-				}
+				handleErrorAndCloseConnection(c, ws, err)
 				return nil
 			}
-
 		case "join_game":
 			// Handle other types similarly based on different IDs
 			if err := lobby.JoinGame(c, ws, requestData); err != nil {
-				c.Logger().Error("Error joining lobby", err)
-				// Use the error message when closing the WebSocket connection
-				closeMessage := websocket.FormatCloseMessage(websocket.CloseNormalClosure, err.Error())
-				if closeErr := ws.WriteMessage(websocket.CloseMessage, closeMessage); closeErr != nil {
-					c.Logger().Error("Error sending close message:", closeErr)
-				}
-				// Close the WebSocket connection
-				if closeErr := ws.Close(); closeErr != nil {
-					c.Logger().Error("Error closing WebSocket:", closeErr)
-				}
+				handleErrorAndCloseConnection(c, ws, err)
 				return nil
 			}
 		case "player_update_position":
 			// Handle other types similarly based on different IDs
 			if err := lobby.PlayerUpdatePosition(c, ws, requestData, request.Token); err != nil {
-				c.Logger().Error("Error joining lobby", err)
-				// Use the error message when closing the WebSocket connection
-				closeMessage := websocket.FormatCloseMessage(websocket.CloseNormalClosure, err.Error())
-				if closeErr := ws.WriteMessage(websocket.CloseMessage, closeMessage); closeErr != nil {
-					c.Logger().Error("Error sending close message:", closeErr)
-				}
-				// Close the WebSocket connection
-				if closeErr := ws.Close(); closeErr != nil {
-					c.Logger().Error("Error closing WebSocket:", closeErr)
-				}
+				handleErrorAndCloseConnection(c, ws, err)
 				return nil
 			}
 		case "player_shoot_projectile":
 			// Handle other types similarly based on different IDs
 			if err := lobby.PlayerShootProjectile(c, ws, requestData, request.Token); err != nil {
-				c.Logger().Error("Error joining lobby", err)
-				// Use the error message when closing the WebSocket connection
-				closeMessage := websocket.FormatCloseMessage(websocket.CloseNormalClosure, err.Error())
-				if closeErr := ws.WriteMessage(websocket.CloseMessage, closeMessage); closeErr != nil {
-					c.Logger().Error("Error sending close message:", closeErr)
-				}
-				// Close the WebSocket connection
-				if closeErr := ws.Close(); closeErr != nil {
-					c.Logger().Error("Error closing WebSocket:", closeErr)
-				}
+				handleErrorAndCloseConnection(c, ws, err)
 				return nil
 			}
 		default:
 			fmt.Println("Unhandled ID")
 		}
-
 	}
 	return nil
+}
+
+func handleErrorAndCloseConnection(c echo.Context, ws *websocket.Conn, err error) {
+	if err == nil {
+		return
+	}
+	c.Logger().Error(err)
+	closeMessage := websocket.FormatCloseMessage(websocket.CloseNormalClosure, err.Error())
+	if closeErr := ws.WriteMessage(websocket.CloseMessage, closeMessage); closeErr != nil {
+		c.Logger().Error("Error sending close message:", closeErr)
+	}
+	if closeErr := ws.Close(); closeErr != nil {
+		c.Logger().Error("Error closing WebSocket:", closeErr)
+	}
+}
+
+type RequestHandler func(echo.Context, *websocket.Conn, map[string]interface{}) error
+
+var handlers = map[string]RequestHandler{
+	"create_game": lobby.CreateGame,
+	"join_game":   lobby.JoinGame,
+	// "player_update_position":  lobby.PlayerUpdatePosition,
+	// "player_shoot_projectile": lobby.PlayerShootProjectile,
+	// Add other handlers here
+}
+
+func handleWebSocketRequest(c echo.Context, ws *websocket.Conn, request types.FrontendRequest) {
+	handler, found := handlers[request.ID]
+	if !found {
+		fmt.Println("Unhandled ID")
+		return
+	}
+
+	requestData, ok := request.Data.(map[string]interface{})
+	if !ok && request.Data != nil {
+		c.Logger().Error("Data not of expected type.", nil)
+		return
+	}
+
+	if err := handler(c, ws, requestData); err != nil {
+		handleErrorAndCloseConnection(c, ws, err)
+	}
 }

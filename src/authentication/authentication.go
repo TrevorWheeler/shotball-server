@@ -17,7 +17,7 @@ func GenerateToken(username string, gameId string, playerId string) (string, err
 	}
 
 	// Set custom claims
-	claims := &types.JwtCustomClaims{
+	claims := &types.Token{
 		PlayerID: playerId,
 		Username: username,
 		GameId:   gameId,
@@ -46,8 +46,8 @@ func GenerateToken(username string, gameId string, playerId string) (string, err
 	return signedToken, nil
 }
 
-func ParseToken(tokenString string) (*jwt.Token, *types.JwtCustomClaims, error) {
-	claims := &types.JwtCustomClaims{}
+func ParseToken(tokenString string) (*jwt.Token, *types.Token, error) {
+	claims := &types.Token{}
 
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		// Make sure that the token's signing method corresponds to the signing method you used

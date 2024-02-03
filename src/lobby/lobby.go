@@ -21,10 +21,8 @@ type SafeConnection struct {
 }
 
 var (
-	// Connection map
 	activeConnections = make(map[string]*SafeConnection)
-	// Mutex to ensure thread safety for the connection map
-	connMutex sync.Mutex
+	connMutex         sync.Mutex
 )
 
 func addConnection(userID string, conn *websocket.Conn) {
@@ -111,8 +109,8 @@ func CreateGame(c echo.Context, ws *websocket.Conn, requestData map[string]inter
 }
 
 type LobbyRequest struct {
-	LobbyId string `json:"lobbyId"`
-	// other fields
+	LobbyId  string `json:"lobbyId"`
+	Username string `json:"username"`
 }
 
 type LobbyResponse struct {
@@ -121,28 +119,35 @@ type LobbyResponse struct {
 }
 
 func JoinGame(c echo.Context, ws *websocket.Conn, requestData map[string]interface{}) error {
-	gameId, ok := requestData["lobbyId"].(string)
-	if !ok {
+
+	requestBytes, err := json.Marshal(requestData)
+	if err != nil {
+		return fmt.Errorf("error marshaling request data: %v", err)
+	}
+	
+	var lobbyRequest LobbyRequest
+	if err := json.Unmarshal(requestBytes, &lobbyRequest); err != nil {
+		return fmt.Errorf("error unmarshaling into LobbyRequest: %v", err)
+	}
+	
+	if lobbyRequest.LobbyId == "" {
 		return fmt.Errorf("lobby id not provided")
 	}
-	playerId := uuid.New().String()
-	c.Logger().Info(gameId)
-	c.Logger().Info(playerId)
-
-	username, ok := requestData["username"].(string)
-	if !ok || username == "" {
+	
+	if lobbyRequest.Username == "" {
 		return fmt.Errorf("username not provided")
 	}
 
-	signedToken, err := authentication.GenerateToken(username, gameId, playerId)
+	playerId := uuid.New().String()
+
+	signedToken, err := authentication.GenerateToken(lobbyRequest.Username, lobbyRequest.LobbyId, playerId)
 	if err != nil {
-		log.Println("Error getting token:", err)
 		return fmt.Errorf("failed to generate user token")
 	}
 
 	player := Player{
 		PlayerID:        playerId,
-		Username:        username,
+		Username:        lobbyRequest.Username,
 		PositionX:       500,
 		PositionY:       500,
 		TargetVelocityX: 0,
@@ -162,14 +167,14 @@ func JoinGame(c echo.Context, ws *websocket.Conn, requestData map[string]interfa
 
 	globalGameState.Lock()
 
-	if lobby, ok := globalGameState.Lobbies[gameId]; ok {
+	if lobby, ok := globalGameState.Lobbies[lobbyRequest.LobbyId]; ok {
 		lobby.Players = append(lobby.Players, player)
 		response := types.FrontendResponse{
 			ID: "game_enter",
 			Data: FrontendGameEnter{
 				Token: signedToken,
 				GameState: FrontendGameState{
-					GameID:      gameId,
+					GameID:      lobbyRequest.LobbyId,
 					Players:     lobby.Players,
 					Projectiles: lobby.Projectiles,
 				},
@@ -179,9 +184,7 @@ func JoinGame(c echo.Context, ws *websocket.Conn, requestData map[string]interfa
 		if err != nil {
 			return nil
 		}
-
 		addConnection(playerId, ws)
-
 		err = ws.WriteMessage(websocket.TextMessage, jsonResponse)
 		if err != nil {
 			return err
@@ -189,21 +192,17 @@ func JoinGame(c echo.Context, ws *websocket.Conn, requestData map[string]interfa
 	} else {
 		c.Logger().Error("Problem")
 	}
-
-	// Don't forget to unlock after you're done with the modification
 	globalGameState.Unlock()
-	updateLobbyActivity(gameId)
+	updateLobbyActivity(lobbyRequest.LobbyId)
 	return nil
 }
 
 func PlayerUpdatePosition(c echo.Context, ws *websocket.Conn, requestData map[string]interface{}, tokenString string) error {
 	token, claims, err := authentication.ParseToken(tokenString)
 	if err != nil {
-		// Handle the error, perhaps return an HTTP 401 Unauthorized status
 		return err
 	}
 	if !token.Valid {
-		// Token is not valid
 		return fmt.Errorf("invalid token")
 	}
 	up, ok := requestData["up"].(bool)

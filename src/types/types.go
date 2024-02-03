@@ -17,7 +17,7 @@ type LoginData struct {
 	Username string `json:"username"`
 }
 
-type JwtCustomClaims struct {
+type Token struct {
 	PlayerID string `json:"playerId"`
 	Username string `json:"username"`
 	GameId   string `json:"gameId"`
