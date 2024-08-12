@@ -33,12 +33,12 @@ func addConnection(userID string, conn *websocket.Conn) {
 
 var globalGameState = struct {
 	sync.RWMutex
-	Lobbies map[string]*GateState
+	Lobbies map[string]*GameState
 }{
-	Lobbies: make(map[string]*GateState),
+	Lobbies: make(map[string]*GameState),
 }
 
-type GateState struct {
+type GameState struct {
 	GameID       string       `json:"gameId"`
 	Players      []Player     `json:"players"`
 	Projectiles  []Projectile `json:"projectiles"`
@@ -48,6 +48,7 @@ type GateState struct {
 type Player struct {
 	PlayerID        string                `json:"playerId"`
 	Username        string                `json:"username"`
+	Health          float64               `json:"health"`
 	PositionX       float64               `json:"positionX"`
 	PositionY       float64               `json:"positionY"`
 	TargetVelocityY float64               `json:"targetVelocityY"`
@@ -81,7 +82,7 @@ type Projectile struct {
 }
 
 func CreateGame(c echo.Context, ws *websocket.Conn, requestData map[string]interface{}) error {
-	newLobby := &GateState{
+	newLobby := &GameState{
 		GameID:      uuid.New().String(),
 		Players:     []Player{},
 		Projectiles: []Projectile{},
@@ -124,16 +125,16 @@ func JoinGame(c echo.Context, ws *websocket.Conn, requestData map[string]interfa
 	if err != nil {
 		return fmt.Errorf("error marshaling request data: %v", err)
 	}
-	
+
 	var lobbyRequest LobbyRequest
 	if err := json.Unmarshal(requestBytes, &lobbyRequest); err != nil {
 		return fmt.Errorf("error unmarshaling into LobbyRequest: %v", err)
 	}
-	
+
 	if lobbyRequest.LobbyId == "" {
 		return fmt.Errorf("lobby id not provided")
 	}
-	
+
 	if lobbyRequest.Username == "" {
 		return fmt.Errorf("username not provided")
 	}
@@ -148,6 +149,7 @@ func JoinGame(c echo.Context, ws *websocket.Conn, requestData map[string]interfa
 	player := Player{
 		PlayerID:        playerId,
 		Username:        lobbyRequest.Username,
+		Health:          100,
 		PositionX:       500,
 		PositionY:       500,
 		TargetVelocityX: 0,
@@ -406,44 +408,68 @@ func GameTick() {
 			for i := range globalGameState.Lobbies {
 				acceleration := float64(33)
 				smoothing := float64(5)
-				for p := range globalGameState.Lobbies[i].Players {
+
+				lobby := globalGameState.Lobbies[i]
+
+				for p := range lobby.Players {
+					player := &lobby.Players[p]
 
 					// Update target velocity based on key presses
-					if globalGameState.Lobbies[i].Players[p].Controls.Up {
-						globalGameState.Lobbies[i].Players[p].TargetVelocityY = -acceleration
+					if player.Controls.Up {
+						player.TargetVelocityY = -acceleration
 
-					} else if globalGameState.Lobbies[i].Players[p].Controls.Down {
-						globalGameState.Lobbies[i].Players[p].TargetVelocityY = acceleration
+					} else if player.Controls.Down {
+						player.TargetVelocityY = acceleration
 					} else {
-						globalGameState.Lobbies[i].Players[p].TargetVelocityY = 0
+						player.TargetVelocityY = 0
 					}
 
-					if globalGameState.Lobbies[i].Players[p].Controls.Left {
-						globalGameState.Lobbies[i].Players[p].TargetVelocityX = -acceleration
-					} else if globalGameState.Lobbies[i].Players[p].Controls.Right {
-						globalGameState.Lobbies[i].Players[p].TargetVelocityX = acceleration
+					if player.Controls.Left {
+						player.TargetVelocityX = -acceleration
+					} else if player.Controls.Right {
+						player.TargetVelocityX = acceleration
 					} else {
-						globalGameState.Lobbies[i].Players[p].TargetVelocityX = 0
+						player.TargetVelocityX = 0
 					}
 
 					// Smoothly interpolate towards the target velocity
-					globalGameState.Lobbies[i].Players[p].VelocityY += (globalGameState.Lobbies[i].Players[p].TargetVelocityY - globalGameState.Lobbies[i].Players[p].VelocityY) * smoothing * deltaTime
+					player.VelocityY += (player.TargetVelocityY - player.VelocityY) * smoothing * deltaTime
 
-					globalGameState.Lobbies[i].Players[p].VelocityX += (globalGameState.Lobbies[i].Players[p].TargetVelocityX - globalGameState.Lobbies[i].Players[p].VelocityX) * smoothing * deltaTime
+					player.VelocityX += (player.TargetVelocityX - player.VelocityX) * smoothing * deltaTime
 
-					globalGameState.Lobbies[i].Players[p].PositionX += globalGameState.Lobbies[i].Players[p].VelocityX * deltaTime
-					globalGameState.Lobbies[i].Players[p].PositionY += globalGameState.Lobbies[i].Players[p].VelocityY * deltaTime
+					player.PositionX += player.VelocityX * deltaTime
+					player.PositionY += player.VelocityY * deltaTime
 					// Clamp PositionX and PositionY
-					globalGameState.Lobbies[i].Players[p].PositionX = clamp(globalGameState.Lobbies[i].Players[p].PositionX, 0, canvasWidth)
-					globalGameState.Lobbies[i].Players[p].PositionY = clamp(globalGameState.Lobbies[i].Players[p].PositionY, 0, canvasHeight)
+					player.PositionX = clamp(player.PositionX, 0, canvasWidth)
+					player.PositionY = clamp(player.PositionY, 0, canvasHeight)
 
 					globalGameState.Lobbies[i].Players[p].Angle =
 						calculateRotationAngle(
-							globalGameState.Lobbies[i].Players[p].PositionX,
-							globalGameState.Lobbies[i].Players[p].PositionY,
-							globalGameState.Lobbies[i].Players[p].MousePositionX,
-							globalGameState.Lobbies[i].Players[p].MousePositionY,
+							player.PositionX,
+							player.PositionY,
+							player.MousePositionX,
+							player.MousePositionY,
 						)
+
+					// Check for collisions with projectiles
+					for j := len(lobby.Projectiles) - 1; j >= 0; j-- {
+						projectile := lobby.Projectiles[j]
+						if isCollision(*player, projectile) {
+							// Reduce player health
+							player.Health -= 10 // example damage value
+							fmt.Printf("Player %s hit! Health: %f\n", player.PlayerID, player.Health)
+
+							// Remove projectile
+							lobby.Projectiles[j] = lobby.Projectiles[len(lobby.Projectiles)-1]
+							lobby.Projectiles = lobby.Projectiles[:len(lobby.Projectiles)-1]
+
+							// Check if the player is dead
+							if player.Health <= 0 {
+								fmt.Printf("Player %s is dead!\n", player.PlayerID)
+								// Handle player death (e.g., remove from game, end game, etc.)
+							}
+						}
+					}
 
 				}
 
@@ -485,6 +511,7 @@ func GameTick() {
 		}
 	}()
 }
+
 func clamp(value, min, max float64) float64 {
 	if value < min {
 		return min
@@ -554,4 +581,15 @@ func calculateOffset(angle, distance, perpendicularDistance float64) Point {
 		X: math.Cos(angle)*distance - math.Sin(angle)*perpendicularDistance,
 		Y: math.Sin(angle)*distance + math.Cos(angle)*perpendicularDistance,
 	}
+}
+
+func isCollision(player Player, projectile Projectile) bool {
+	playerRadius := 20.0    // example radius for player
+	projectileRadius := 5.0 // example radius for projectile
+
+	dx := player.PositionX - projectile.PositionX
+	dy := player.PositionY - projectile.PositionY
+	distance := math.Sqrt(dx*dx + dy*dy)
+
+	return distance < (playerRadius + projectileRadius)
 }
