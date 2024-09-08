@@ -497,16 +497,7 @@ func GameTick() {
 
 				broadcastMessageToGameRoom(globalGameState.Lobbies[i].GameID, response)
 
-				// fmt.Printf("DeltaTime : %+v\n", deltaTime)
-				// fmt.Printf("VelocityY: %+v\n", globalGameState.Lobbies[i].Players[p].VelocityY)
-				// fmt.Printf("Position Y: %+v\n", globalGameState.Lobbies[i].Players[p].PositionY)
-				// fmt.Printf("VelocityX: %+v\n", globalGameState.Lobbies[i].Players[p].VelocityX)
-				// fmt.Printf("Position X: %+v\n", globalGameState.Lobbies[i].Players[p].PositionX)
-				// fmt.Printf("Position Y: %+v\n", globalGameState.Lobbies[i].Players[p].PositionY)
-				// fmt.Printf("Position X: %+v\n", globalGameState.Lobbies[i].Players[p].PositionX)
-				// fmt.Printf("############### \n")
 			}
-
 			globalGameState.Unlock()
 		}
 	}()
