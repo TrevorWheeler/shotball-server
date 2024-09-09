@@ -236,8 +236,6 @@ func PlayerUpdatePosition(c echo.Context, ws *websocket.Conn, requestData map[st
 	if !ok {
 		return fmt.Errorf("mouse y not provided")
 	}
-
-	// Use the values from claims
 	playerId := claims.PlayerID
 	gameId := claims.GameId
 
@@ -269,76 +267,58 @@ type Point struct {
 func PlayerShootProjectile(c echo.Context, ws *websocket.Conn, requestData map[string]interface{}, tokenString string) error {
 	token, claims, err := authentication.ParseToken(tokenString)
 	if err != nil {
-		// Handle the error, perhaps return an HTTP 401 Unauthorized status
 		return err
 	}
 	if !token.Valid {
-		// Token is not valid
 		return fmt.Errorf("invalid token")
 	}
-	// gameId, ok := requestData["gameId"].(bool)
-	// if !ok {
-	// 	return fmt.Errorf("up not provided")
-	// }
 
-	// Use the values from claims
 	playerId := claims.PlayerID
 	gameId := claims.GameId
 
 	globalGameState.Lock()
-	if lobby, ok := globalGameState.Lobbies[gameId]; ok {
+	defer globalGameState.Unlock()
 
-		// Iterate through players to find the matching one
+	if lobby, ok := globalGameState.Lobbies[gameId]; ok {
 		for i := range lobby.Players {
 			if lobby.Players[i].PlayerID == playerId {
+				player := &lobby.Players[i]
+				angle := player.Angle
+				x := player.PositionX
+				y := player.PositionY
 
-				var angle float64 = lobby.Players[i].Angle
-				var x float64 = lobby.Players[i].PositionX
-				var y float64 = lobby.Players[i].PositionY
+				// Define the tip of the triangle relative to the center of the spacecraft
+				triangleHeight := 30.0 // Distance from the center to the tip of the triangle
+				tipPosition := rotateAndTranslate(Point{X: 0, Y: -triangleHeight}, angle, x, y)
 
-				topVertex := rotateAndTranslate(Point{X: 0, Y: -20}, angle, x, y)
-
-				var distance float64 = float64(0)
-				var perpendicularDistance float64 = float64(-5)
-
-				offset := calculateOffset(angle, distance, perpendicularDistance)
-
-				startPositionX := topVertex.X + offset.X
-
-				startPositionY := topVertex.Y + offset.Y
-
-				// // Calculate the velocity of the projectile towards the mouse position
+				// Calculate projectile velocity towards the mouse position
 				projectileVelocity := calculateProjectileVelocity(
-					startPositionX,
-					startPositionY,
-					lobby.Players[i].MousePositionX,
-					lobby.Players[i].MousePositionY,
-					float64(13),
+					tipPosition.X,
+					tipPosition.Y,
+					player.MousePositionX,
+					player.MousePositionY,
+					13.0, // Speed of the projectile
 				)
 
+				// Create the projectile starting at the tip of the triangle
 				projectile := Projectile{
 					ProjectileID: uuid.New().String(),
 					PlayerID:     playerId,
-					PositionX:    startPositionX,
-					PositionY:    startPositionY,
+					PositionX:    tipPosition.X,
+					PositionY:    tipPosition.Y,
 					VelocityX:    projectileVelocity.X,
 					VelocityY:    projectileVelocity.Y,
 				}
 
+				// Add projectile to the lobby
 				lobby.Projectiles = append(lobby.Projectiles, projectile)
 
-				// broadcastMessageToGameRoom(gameId, response)
-
 				break
-			} else {
-				fmt.Printf("notFound")
 			}
 		}
 	} else {
 		c.Logger().Error("Problem")
 	}
-
-	globalGameState.Unlock()
 
 	return nil
 }
@@ -387,122 +367,135 @@ func cleanupLobbies() {
 
 func GameTick() {
 	ticker := time.NewTicker(16 * time.Millisecond) // Approximately 60 ticks per second
-	// ticker := time.NewTicker(1 * time.Second) // Approximately 60 ticks per second
-	lastTick := time.Now() // Initialize lastTick to the current time
+	lastTick := time.Now()                          // Initialize lastTick to the current time
 
 	canvasWidth := float64(2560)
 	canvasHeight := float64(1440)
 
+	// Define constants outside the loop to avoid recalculating them each tick
+	const acceleration = 33.0
+	const smoothing = 5.0
+	const damage = 10.0
+
 	go func() {
 		for range ticker.C {
-			// Calculate delta time
 			now := time.Now()
-			// fmt.Printf("############### \n")
-			// fmt.Printf("now : %+v\n", now)
-			// fmt.Printf("lastTick : %+v\n", lastTick)
 			deltaTime := now.Sub(lastTick).Seconds() * 10
 			lastTick = now
 
 			globalGameState.Lock()
-			// Iterate through players to find the matching one
-			for i := range globalGameState.Lobbies {
-				acceleration := float64(33)
-				smoothing := float64(5)
 
-				lobby := globalGameState.Lobbies[i]
-
+			// Iterate through all lobbies
+			for _, lobby := range globalGameState.Lobbies {
+				// Update each player's state
 				for p := range lobby.Players {
 					player := &lobby.Players[p]
 
 					// Update target velocity based on key presses
+					player.TargetVelocityY = 0
 					if player.Controls.Up {
 						player.TargetVelocityY = -acceleration
-
 					} else if player.Controls.Down {
 						player.TargetVelocityY = acceleration
-					} else {
-						player.TargetVelocityY = 0
 					}
 
+					player.TargetVelocityX = 0
 					if player.Controls.Left {
 						player.TargetVelocityX = -acceleration
 					} else if player.Controls.Right {
 						player.TargetVelocityX = acceleration
-					} else {
-						player.TargetVelocityX = 0
 					}
 
 					// Smoothly interpolate towards the target velocity
 					player.VelocityY += (player.TargetVelocityY - player.VelocityY) * smoothing * deltaTime
-
 					player.VelocityX += (player.TargetVelocityX - player.VelocityX) * smoothing * deltaTime
 
+					// Update player position
 					player.PositionX += player.VelocityX * deltaTime
 					player.PositionY += player.VelocityY * deltaTime
+
 					// Clamp PositionX and PositionY
 					player.PositionX = clamp(player.PositionX, 0, canvasWidth)
 					player.PositionY = clamp(player.PositionY, 0, canvasHeight)
 
-					globalGameState.Lobbies[i].Players[p].Angle =
-						calculateRotationAngle(
-							player.PositionX,
-							player.PositionY,
-							player.MousePositionX,
-							player.MousePositionY,
-						)
+					// Update player rotation angle towards the mouse
+					player.Angle = calculateRotationAngle(player.PositionX, player.PositionY, player.MousePositionX, player.MousePositionY)
 
-					// Check for collisions with projectiles
-					for j := len(lobby.Projectiles) - 1; j >= 0; j-- {
-						projectile := lobby.Projectiles[j]
-						if isCollision(*player, projectile) {
-							// Reduce player health
-							player.Health -= 10 // example damage value
+					// Handle collisions with projectiles
+					indicesToRemove := map[int]bool{} // Store indices of projectiles to remove
+					for j := range lobby.Projectiles {
+						projectile := &lobby.Projectiles[j]
+
+						if isCollision(*player, *projectile) {
+							// Handle projectile hit
+							player.Health -= damage
 							fmt.Printf("Player %s hit! Health: %f\n", player.PlayerID, player.Health)
 
-							// Remove projectile
-							lobby.Projectiles[j] = lobby.Projectiles[len(lobby.Projectiles)-1]
-							lobby.Projectiles = lobby.Projectiles[:len(lobby.Projectiles)-1]
+							// Mark projectile for removal
+							indicesToRemove[j] = true
 
-							// Check if the player is dead
+							// Handle player death
 							if player.Health <= 0 {
 								fmt.Printf("Player %s is dead!\n", player.PlayerID)
-								// Handle player death (e.g., remove from game, end game, etc.)
+								// Implement player death logic here
 							}
 						}
 					}
 
+					// Remove the projectiles marked for deletion
+					lobby.Projectiles = removeProjectiles(lobby.Projectiles, indicesToRemove)
 				}
 
-				for j := len(globalGameState.Lobbies[i].Projectiles) - 1; j >= 0; j-- {
+				// Update projectile positions and remove if off-screen
+				indicesToRemove := map[int]bool{} // Store indices of projectiles to remove
+				for j := range lobby.Projectiles {
+					projectile := &lobby.Projectiles[j]
+
 					// Update projectile position
-					globalGameState.Lobbies[i].Projectiles[j].PositionX += globalGameState.Lobbies[i].Projectiles[j].VelocityX * deltaTime
-					globalGameState.Lobbies[i].Projectiles[j].PositionY += globalGameState.Lobbies[i].Projectiles[j].VelocityY * deltaTime
+					projectile.PositionX += projectile.VelocityX * deltaTime
+					projectile.PositionY += projectile.VelocityY * deltaTime
 
 					// Check if the projectile is off-screen
-					withinVerticalBounds := globalGameState.Lobbies[i].Projectiles[j].PositionY >= 0 && globalGameState.Lobbies[i].Projectiles[j].PositionY <= canvasHeight
-					withinHorizontalBounds := globalGameState.Lobbies[i].Projectiles[j].PositionX >= 0 && globalGameState.Lobbies[i].Projectiles[j].PositionX <= canvasWidth
-
-					// Remove the projectile if it's off-screen
-					if !(withinVerticalBounds && withinHorizontalBounds) {
-						// Remove the projectile by swapping it with the last one and trimming the slice
-						globalGameState.Lobbies[i].Projectiles[j] = globalGameState.Lobbies[i].Projectiles[len(globalGameState.Lobbies[i].Projectiles)-1]
-						globalGameState.Lobbies[i].Projectiles = globalGameState.Lobbies[i].Projectiles[:len(globalGameState.Lobbies[i].Projectiles)-1]
+					if isProjectileOffScreen(projectile, canvasWidth, canvasHeight) {
+						indicesToRemove[j] = true
 					}
 				}
 
-				response := types.FrontendResponse{
-					ID:   "game_update",
-					Data: globalGameState.Lobbies[i],
-				}
+				// Remove the off-screen projectiles
+				lobby.Projectiles = removeProjectiles(lobby.Projectiles, indicesToRemove)
 
-				broadcastMessageToGameRoom(globalGameState.Lobbies[i].GameID, response)
-
+				// Broadcast updated game state to all players
+				broadcastGameState(lobby)
 			}
+
 			globalGameState.Unlock()
 		}
 	}()
 }
 
+func broadcastGameState(lobby *GameState) {
+	response := types.FrontendResponse{
+		ID:   "game_update",
+		Data: lobby,
+	}
+	broadcastMessageToGameRoom(lobby.GameID, response)
+}
+
+// Helper function to remove projectiles based on their indices
+func removeProjectiles(projectiles []Projectile, indicesToRemove map[int]bool) []Projectile {
+	newProjectiles := projectiles[:0] // Keep capacity, avoid memory reallocation
+	for i, proj := range projectiles {
+		if !indicesToRemove[i] {
+			newProjectiles = append(newProjectiles, proj)
+		}
+	}
+	return newProjectiles
+}
+
+// Check if a projectile is off-screen
+func isProjectileOffScreen(proj *Projectile, canvasWidth, canvasHeight float64) bool {
+	return proj.PositionX < 0 || proj.PositionX > canvasWidth || proj.PositionY < 0 || proj.PositionY > canvasHeight
+}
 func clamp(value, min, max float64) float64 {
 	if value < min {
 		return min
@@ -556,9 +549,13 @@ func removeConnection(safeConn *SafeConnection) {
 }
 
 func rotateAndTranslate(point Point, angle, centerX, centerY float64) Point {
+	// Precompute cosine and sine for the given angle
+	cosAngle := math.Cos(angle)
+	sinAngle := math.Sin(angle)
+
 	// Rotate around the center (0, 0)
-	rotatedX := math.Cos(angle)*point.X - math.Sin(angle)*point.Y
-	rotatedY := math.Sin(angle)*point.X + math.Cos(angle)*point.Y
+	rotatedX := cosAngle*point.X - sinAngle*point.Y
+	rotatedY := sinAngle*point.X + cosAngle*point.Y
 
 	// Then translate the point to its actual position
 	return Point{
