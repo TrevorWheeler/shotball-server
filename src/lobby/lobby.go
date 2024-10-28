@@ -81,6 +81,11 @@ type Projectile struct {
 	VelocityY    float64 `json:"velocityY"`
 }
 
+// Add this new constant at the top with other constants
+const (
+	PLAYER_DEATH_EVENT = "player_death"
+)
+
 func CreateGame(c echo.Context, ws *websocket.Conn, requestData map[string]interface{}) error {
 	newLobby := &GameState{
 		GameID:      uuid.New().String(),
@@ -437,7 +442,21 @@ func GameTick() {
 							// Handle player death
 							if player.Health <= 0 {
 								fmt.Printf("Player %s is dead!\n", player.PlayerID)
-								// Implement player death logic here
+
+								// Send death notification
+								deathResponse := types.FrontendResponse{
+									ID: PLAYER_DEATH_EVENT,
+									Data: map[string]interface{}{
+										"playerId": player.PlayerID,
+										"username": player.Username,
+									},
+								}
+								broadcastMessageToGameRoom(lobby.GameID, deathResponse)
+
+								// Optional: Reset player or remove them from the game
+								player.Health = 100    // Reset health
+								player.PositionX = 500 // Reset position
+								player.PositionY = 500
 							}
 						}
 					}

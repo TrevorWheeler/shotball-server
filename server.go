@@ -12,13 +12,22 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
-var (
-	upgrader = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return r.Header.Get("Origin") == "http://localhost:8080"
-		},
-	}
-)
+// Update the upgrader to be more secure and configurable
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		// TODO: Make this configurable via environment variable
+		allowedOrigins := []string{"http://localhost:8080", "http://localhost:3000"}
+		origin := r.Header.Get("Origin")
+		for _, allowed := range allowedOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		return false
+	},
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
 
 func main() {
 	lobby.StartLobbyCleanupTicker()
@@ -35,27 +44,20 @@ func main() {
 
 // Connect function
 func connect(c echo.Context) error {
-
 	// WebSocket upgrade and other setup code...
 	ws, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 	if err != nil {
 		return err
 	}
 	defer ws.Close()
+
 	for {
-		messageType, msg, err := ws.ReadMessage()
-
-		if messageType != websocket.TextMessage || messageType == websocket.TextMessage && string(msg) != "ping" {
-			c.Logger().Info("Request: ", msg)
-		}
-
+		_, msg, err := ws.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				c.Logger().Error("Normal WebSocket closure detected.", err)
-				break
+				return nil
 			}
-			c.Logger().Error("WebSocket read error:", err)
-			continue
+			return err
 		}
 
 		// TODO: ping pong - handle concurrent websocket write issue caused by pong response.
@@ -68,8 +70,7 @@ func connect(c echo.Context) error {
 		// }
 
 		var request types.FrontendRequest
-		if err := json.Unmarshal([]byte(msg), &request); err != nil {
-			c.Logger().Error("Error unmarshalling JSON:", err)
+		if err := json.Unmarshal(msg, &request); err != nil {
 			continue
 		}
 
@@ -110,7 +111,6 @@ func connect(c echo.Context) error {
 			fmt.Println("Unhandled ID")
 		}
 	}
-	return nil
 }
 
 func handleErrorAndCloseConnection(c echo.Context, ws *websocket.Conn, err error) {
